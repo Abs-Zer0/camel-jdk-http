@@ -2,10 +2,9 @@ package abs.zer0.camel.jdk.http;
 
 import org.apache.camel.Endpoint;
 import org.apache.camel.SSLContextParametersAware;
-import org.apache.camel.spi.HeaderFilterStrategy;
 import org.apache.camel.spi.Metadata;
 import org.apache.camel.spi.annotations.Component;
-import org.apache.camel.support.DefaultComponent;
+import org.apache.camel.support.HeaderFilterStrategyComponent;
 import org.apache.camel.support.jsse.SSLContextParameters;
 import org.apache.camel.util.URISupport;
 import org.apache.camel.util.UnsafeUriCharactersEncoder;
@@ -17,10 +16,7 @@ import java.util.Map;
 import java.util.Objects;
 
 @Component("jdk-http")
-public class JdkHttpComponent extends DefaultComponent implements JdkHttpConfigurationAware, SSLContextParametersAware {
-
-    @Metadata(label = "configuration", description = "To use JdkHttpConfiguration as configuration when creating endpoints.")
-    private JdkHttpConfiguration configuration;
+public class JdkHttpComponent extends HeaderFilterStrategyComponent implements SSLContextParametersAware {
 
     @Metadata(label = "advanced", defaultValue = "HTTP/1.1", description = "Requests a specific HTTP protocol version where possible." +
             " If this method is not invoked prior to building, then newly built clients will prefer HTTP/2." +
@@ -64,8 +60,6 @@ public class JdkHttpComponent extends DefaultComponent implements JdkHttpConfigu
     @Metadata(label = "advanced", defaultValue = "NORMAL", description = "Specifies whether requests will automatically follow redirects issued by the server." +
             " Normal policy means always redirect, except from HTTPS URLs to HTTP URLs.")
     private HttpClient.Redirect redirectPolicy;
-    @Metadata(label = "filter", description = "To use a custom HeaderFilterStrategy to filter header to and from Camel message.")
-    private HeaderFilterStrategy headerFilterStrategy;
     @Metadata(label = "advanced", description = "Sets the default priority for any HTTP/2 requests sent from JDK HttpClient." +
             " The value provided must be between 1 and 256 (inclusive).")
     private Integer http2Priority;
@@ -82,31 +76,18 @@ public class JdkHttpComponent extends DefaultComponent implements JdkHttpConfigu
 
     @Override
     protected Endpoint createEndpoint(String uri, String remaining, Map<String, Object> parameters) throws Exception {
-        final JdkHttpConfiguration resolvedConfiguration = resolveConfiguration();
-        final JdkHttpEndpoint endpoint = new JdkHttpEndpoint(uri, this, resolvedConfiguration);
-        setProperties(endpoint, parameters);
+        final JdkHttpEndpoint httpEndpoint = new JdkHttpEndpoint(uri, this);
+        setEndpointParameters(httpEndpoint);
+        setProperties(httpEndpoint, parameters);
 
         final URI remainingUri = URI.create(UnsafeUriCharactersEncoder.encodeHttpURI(remaining));
-        final URI httpUri = URISupport.createRemainingURI(
-                new URI(remainingUri.getScheme(), remainingUri.getUserInfo(), remainingUri.getHost(), remainingUri.getPort(), remainingUri.getPath(), null, remainingUri.getFragment()),
-                parameters
-        );
-        endpoint.setHttpUri(httpUri);
+        final URI httpUri = URISupport.createRemainingURI(remainingUri, parameters);
+        httpEndpoint.setHttpUri(httpUri);
 
-        return endpoint;
+        return httpEndpoint;
     }
 
 
-    public JdkHttpConfiguration getConfiguration() {
-        return configuration;
-    }
-
-    public void setConfiguration(JdkHttpConfiguration configuration) {
-        this.configuration = Objects.requireNonNull(configuration, "JdkHttpConfiguration cannot be null")
-                .copy();
-    }
-
-    @Override
     public HttpClient.Version getHttpVersion() {
         return httpVersion;
     }
@@ -115,8 +96,7 @@ public class JdkHttpComponent extends DefaultComponent implements JdkHttpConfigu
         this.httpVersion = Objects.requireNonNull(httpVersion, "HTTP version cannot be null");
     }
 
-    @Override
-    public Boolean getThrowExceptionOnFailure() {
+    public Boolean isThrowExceptionOnFailure() {
         return throwExceptionOnFailure;
     }
 
@@ -124,7 +104,6 @@ public class JdkHttpComponent extends DefaultComponent implements JdkHttpConfigu
         this.throwExceptionOnFailure = throwExceptionOnFailure;
     }
 
-    @Override
     public String getOkStatusCodeRanges() {
         return okStatusCodeRanges;
     }
@@ -133,8 +112,7 @@ public class JdkHttpComponent extends DefaultComponent implements JdkHttpConfigu
         this.okStatusCodeRanges = Objects.requireNonNull(okStatusCodeRanges, "OK StatusCode ranges cannot be null");
     }
 
-    @Override
-    public Boolean getDisableStreamCache() {
+    public Boolean isDisableStreamCache() {
         return disableStreamCache;
     }
 
@@ -142,8 +120,7 @@ public class JdkHttpComponent extends DefaultComponent implements JdkHttpConfigu
         this.disableStreamCache = disableStreamCache;
     }
 
-    @Override
-    public Boolean getResponseBodyAsByteArray() {
+    public Boolean isResponseBodyAsByteArray() {
         return responseBodyAsByteArray;
     }
 
@@ -151,7 +128,6 @@ public class JdkHttpComponent extends DefaultComponent implements JdkHttpConfigu
         this.responseBodyAsByteArray = responseBodyAsByteArray;
     }
 
-    @Override
     public Duration getConnectTimeout() {
         return connectTimeout;
     }
@@ -160,7 +136,6 @@ public class JdkHttpComponent extends DefaultComponent implements JdkHttpConfigu
         this.connectTimeout = Objects.requireNonNull(connectTimeout, "Connect timeout cannot be null");
     }
 
-    @Override
     public Duration getResponseTimeout() {
         return responseTimeout;
     }
@@ -169,7 +144,6 @@ public class JdkHttpComponent extends DefaultComponent implements JdkHttpConfigu
         this.responseTimeout = Objects.requireNonNull(responseTimeout, "Response timeout cannot be null");
     }
 
-    @Override
     public Integer getMaxConnections() {
         return maxConnections;
     }
@@ -178,19 +152,7 @@ public class JdkHttpComponent extends DefaultComponent implements JdkHttpConfigu
         this.maxConnections = maxConnections;
     }
 
-    @Override
     public SSLContextParameters getSslContextParameters() {
-        if (sslContextParameters == null && useGlobalSslContextParameters) {
-            try {
-                lock.lock();
-                if (sslContextParameters == null && useGlobalSslContextParameters) {
-                    sslContextParameters = getCamelContext().getSSLContextParameters();
-                }
-            } finally {
-                lock.unlock();
-            }
-        }
-
         return sslContextParameters;
     }
 
@@ -208,7 +170,6 @@ public class JdkHttpComponent extends DefaultComponent implements JdkHttpConfigu
         this.useGlobalSslContextParameters = useGlobalSslContextParameters;
     }
 
-    @Override
     public HttpClient.Redirect getRedirectPolicy() {
         return redirectPolicy;
     }
@@ -217,16 +178,6 @@ public class JdkHttpComponent extends DefaultComponent implements JdkHttpConfigu
         this.redirectPolicy = Objects.requireNonNull(redirectPolicy, "HTTP redirect policy cannot be null");
     }
 
-    @Override
-    public HeaderFilterStrategy getHeaderFilterStrategy() {
-        return headerFilterStrategy;
-    }
-
-    public void setHeaderFilterStrategy(HeaderFilterStrategy headerFilterStrategy) {
-        this.headerFilterStrategy = Objects.requireNonNull(headerFilterStrategy, "Camel HeaderFilterStrategy cannot be null");
-    }
-
-    @Override
     public Integer getHttp2Priority() {
         return http2Priority;
     }
@@ -235,8 +186,7 @@ public class JdkHttpComponent extends DefaultComponent implements JdkHttpConfigu
         this.http2Priority = http2Priority;
     }
 
-    @Override
-    public Boolean getUseSystemProperties() {
+    public Boolean isUseSystemProperties() {
         return useSystemProperties;
     }
 
@@ -244,7 +194,6 @@ public class JdkHttpComponent extends DefaultComponent implements JdkHttpConfigu
         this.useSystemProperties = useSystemProperties;
     }
 
-    @Override
     public Boolean getAsync() {
         return async;
     }
@@ -253,7 +202,6 @@ public class JdkHttpComponent extends DefaultComponent implements JdkHttpConfigu
         this.async = async;
     }
 
-    @Override
     public String getProxyHost() {
         return proxyHost;
     }
@@ -262,7 +210,6 @@ public class JdkHttpComponent extends DefaultComponent implements JdkHttpConfigu
         this.proxyHost = Objects.requireNonNull(proxyHost, "HTTP proxy host cannot be null");
     }
 
-    @Override
     public Integer getProxyPort() {
         return proxyPort;
     }
@@ -272,14 +219,59 @@ public class JdkHttpComponent extends DefaultComponent implements JdkHttpConfigu
     }
 
 
-    private JdkHttpConfiguration resolveConfiguration() {
-        final JdkHttpConfiguration resolvedConfiguration = configuration != null ?
-                configuration.copy() :
-                new JdkHttpConfiguration();
+    private void setEndpointParameters(JdkHttpEndpoint httpEndpoint) {
+        if (httpVersion != null) {
+            httpEndpoint.setHttpVersion(httpVersion);
+        }
 
-        setConfigurationParameters(resolvedConfiguration);
+        if (throwExceptionOnFailure != null) {
+            httpEndpoint.setThrowExceptionOnFailure(throwExceptionOnFailure);
+        }
+        if (okStatusCodeRanges != null && !okStatusCodeRanges.isBlank()) {
+            httpEndpoint.setOkStatusCodeRanges(okStatusCodeRanges);
+        }
+        if (disableStreamCache != null) {
+            httpEndpoint.setDisableStreamCache(disableStreamCache);
+        }
+        if (responseBodyAsByteArray != null) {
+            httpEndpoint.setResponseBodyAsByteArray(responseBodyAsByteArray);
+        }
 
-        return resolvedConfiguration;
+        if (connectTimeout != null) {
+            httpEndpoint.setConnectTimeout(connectTimeout);
+        }
+        if (responseTimeout != null) {
+            httpEndpoint.setResponseTimeout(responseTimeout);
+        }
+        if (maxConnections != null) {
+            httpEndpoint.setMaxConnections(maxConnections);
+        }
+        if (sslContextParameters != null) {
+            httpEndpoint.setSslContextParameters(sslContextParameters);
+        } else {
+            final SSLContextParameters globalSslContextParameters = retrieveGlobalSslContextParameters();
+            if (globalSslContextParameters != null) {
+                httpEndpoint.setSslContextParameters(globalSslContextParameters);
+            }
+        }
+
+        if (redirectPolicy != null) {
+            httpEndpoint.setRedirectPolicy(redirectPolicy);
+        }
+        if (http2Priority != null) {
+            httpEndpoint.setHttp2Priority(http2Priority);
+        }
+        if (useSystemProperties != null) {
+            httpEndpoint.setUseSystemProperties(useSystemProperties);
+        }
+        if (async != null) {
+            httpEndpoint.setAsync(async);
+        }
+
+        if (proxyHost != null && !proxyHost.isBlank()) {
+            httpEndpoint.setProxyHost(proxyHost);
+            httpEndpoint.setProxyPort(Objects.requireNonNull(proxyPort, "HTTP proxy port cannot be null"));
+        }
     }
 
 }

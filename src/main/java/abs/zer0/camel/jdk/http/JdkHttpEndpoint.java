@@ -22,9 +22,10 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 @UriEndpoint(
+        firstVersion = "4.14.0",
         scheme = "jdk-http",
         title = "JDK HTTP client",
-        syntax = "jdk-http:protocol://host:port/path?query",
+        syntax = "jdk-http:httpUri",
         producerOnly = true,
         category = {Category.HTTP},
         lenientProperties = true,
@@ -36,14 +37,13 @@ import java.util.concurrent.Executors;
                 "protocol=http"
         }
 )
-public class JdkHttpEndpoint extends DefaultEndpoint implements JdkHttpConfigurationAware {
+public class JdkHttpEndpoint extends DefaultEndpoint implements EndpointServiceLocation, HeaderFilterStrategyAware {
 
-    @UriParam(label = "configuration", description = "To use JdkHttpConfiguration as configuration when creating endpoints.")
-    private JdkHttpConfiguration configuration;
     @UriParam(label = "advanced", description = "To use custom JDK HttpClient.")
-    private volatile HttpClient httpClient;
+    private HttpClient httpClient;
 
-    @UriPath
+    @UriPath(name = "httpUri", description = "The URL of the HTTP endpoint to call.")
+    @Metadata(required = true)
     private URI httpUri;
     @UriParam(label = "producer", description = "The HTTP method to use.")
     private String httpMethod;
@@ -52,7 +52,7 @@ public class JdkHttpEndpoint extends DefaultEndpoint implements JdkHttpConfigura
             " If set to HTTP/2, then each request will attempt to upgrade to HTTP/2." +
             " If the upgrade succeeds, then the response to this request will use HTTP/2 and all subsequent requests and responses to the same origin server will use HTTP/2." +
             " If the upgrade fails, then the response will be handled using HTTP/1.1")
-    private HttpClient.Version httpVersion;
+    private HttpClient.Version httpVersion = HttpClient.Version.HTTP_1_1;
 
     @UriParam(label = "producer", defaultValue = "true", description = "Option to disable throwing the HttpOperationFailedException in case of failed responses from the remote server."
             + " This allows you to get all responses regardless of the HTTP status code.")
@@ -73,12 +73,12 @@ public class JdkHttpEndpoint extends DefaultEndpoint implements JdkHttpConfigura
     @UriParam(label = "timeout", defaultValue = "PT30S", description = "Sets the connect timeout duration for JDK HttpClient." +
             " In the case where a new connection needs to be established, if the connection cannot be established within the given duration, then HttpClient::send throws an HttpConnectTimeoutException, or HttpClient::sendAsync completes exceptionally with an HttpConnectTimeoutException." +
             " If a new connection does not need to be established, for example if a connection can be reused from a previous request, then this timeout duration has no effect.")
-    private Duration connectTimeout;
+    private Duration connectTimeout = Duration.ofSeconds(30);
     @UriParam(label = "timeout", defaultValue = "infinite Duration", description = "Sets a timeout for HTTP request." +
             " If the response is not received within the specified timeout then an HttpTimeoutException is thrown from HttpClient::send or HttpClient::sendAsync completes exceptionally with an HttpTimeoutException.")
     private Duration responseTimeout;
     @UriParam(label = "advanced", defaultValue = "20", description = "The maximum number of connections.")
-    private Integer maxConnections;
+    private int maxConnections = 20;
     @UriParam(label = "security", description = "To configure security using SSLContextParameters."
             + " Important: Only one instance of org.apache.camel.support.jsse.SSLContextParameters is supported per JdkHttpComponent."
             + " If you need to use 2 or more different instances, you need to define a new JdkHttpComponent per instance you need.")
@@ -86,39 +86,41 @@ public class JdkHttpEndpoint extends DefaultEndpoint implements JdkHttpConfigura
 
     @UriParam(label = "advanced", defaultValue = "NORMAL", description = "Specifies whether requests will automatically follow redirects issued by the server." +
             " Normal policy means always redirect, except from HTTPS URLs to HTTP URLs.")
-    private HttpClient.Redirect redirectPolicy;
+    private HttpClient.Redirect redirectPolicy = HttpClient.Redirect.NORMAL;
     @UriParam(label = "filter", description = "To use a custom HeaderFilterStrategy to filter header to and from Camel message.")
     private HeaderFilterStrategy headerFilterStrategy;
     @UriParam(label = "advanced", description = "Sets the default priority for any HTTP/2 requests sent from JDK HttpClient." +
             " The value provided must be between 1 and 256 (inclusive).")
     private Integer http2Priority;
     @UriParam(label = "advanced", defaultValue = "false", description = "To use System Properties as fallback for configuration for configuring JDK HttpClient.")
-    private Boolean useSystemProperties;
+    private boolean useSystemProperties = false;
     @UriParam(label = "async,advanced", defaultValue = "false", description = "To use asynchronous Camel Endpoint implementation and JDK HttpClient call.")
-    private Boolean async;
+    private boolean async = false;
 
     @UriParam(label = "proxy", description = "Sets the proxy server host.")
     private String proxyHost;
     @UriParam(label = "proxy", description = "Sets the proxy server port.")
     private Integer proxyPort;
 
-    public JdkHttpEndpoint(String endpointUri, JdkHttpComponent component, JdkHttpConfiguration configuration) {
+    public JdkHttpEndpoint(String endpointUri, JdkHttpComponent component) {
         super(endpointUri, component);
-        this.configuration = configuration;
+        this.httpUri = URI.create(endpointUri);
     }
+
 
     @Override
     public Producer createProducer() throws Exception {
-        final JdkHttpConfiguration resolvedConfiguration = resolveConfiguration();
-        final HttpClient resolvedHttpClient = resolveHttpClient(resolvedConfiguration);
+        final HttpClient resolvedHttpClient = resolveHttpClient();
         if (httpClient != resolvedHttpClient) {
-            closeHttpClient();
-            httpClient = resolvedHttpClient;
+            setHttpClient(resolvedHttpClient);
         }
 
-        return resolvedConfiguration.isAsync() ?
-                new JdkHttpAsyncProducer(this, resolvedConfiguration, httpClient) :
-                new JdkHttpProducer(this, resolvedConfiguration, httpClient);
+        final JdkHttpBinding httpBinding = new JdkHttpBinding(httpUri);
+        setBindingParameters(httpBinding);
+
+        return async ?
+                new JdkHttpAsyncProducer(this, httpClient, httpBinding) :
+                new JdkHttpProducer(this, httpClient, httpBinding);
     }
 
     @Override
@@ -132,43 +134,51 @@ public class JdkHttpEndpoint extends DefaultEndpoint implements JdkHttpConfigura
         super.doStop();
     }
 
+    @Override
+    public String getServiceUrl() {
+        if (httpUri != null) {
+            return httpUri.toString();
+        }
+
+        return null;
+    }
+
+    @Override
+    public String getServiceProtocol() {
+        return "http";
+    }
+
 
     public HttpClient getHttpClient() {
         return httpClient;
     }
 
-    public void setHttpClient(HttpClient httpClient) {
-        this.httpClient = Objects.requireNonNull(httpClient, "HTTP client cannot be null");
+    public synchronized void setHttpClient(HttpClient httpClient) {
+        Objects.requireNonNull(httpClient, "HTTP client cannot be null");
+        if (this.httpClient != null) {
+            closeHttpClient();
+        }
+        this.httpClient = httpClient;
     }
 
-    public JdkHttpConfiguration getConfiguration() {
-        return configuration;
-    }
-
-    public void setConfiguration(JdkHttpConfiguration configuration) {
-        this.configuration = Objects.requireNonNull(configuration, "JdkHttpConfiguration cannot be null")
-                .copy();
-    }
-
-    @Override
     public URI getHttpUri() {
         return httpUri;
     }
 
     public void setHttpUri(URI httpUri) {
-        this.httpUri = httpUri;
+        this.httpUri = Objects.requireNonNull(httpUri, "HTTP URI cannot be null");
     }
 
-    @Override
     public String getHttpMethod() {
         return httpMethod;
     }
 
     public void setHttpMethod(String httpMethod) {
-        this.httpMethod = httpMethod;
+        this.httpMethod = Objects.requireNonNull(httpMethod, "HTTP method cannot be null")
+                .trim()
+                .toUpperCase();
     }
 
-    @Override
     public HttpClient.Version getHttpVersion() {
         return httpVersion;
     }
@@ -177,7 +187,6 @@ public class JdkHttpEndpoint extends DefaultEndpoint implements JdkHttpConfigura
         this.httpVersion = Objects.requireNonNull(httpVersion, "HTTP version cannot be null");
     }
 
-    @Override
     public Boolean getThrowExceptionOnFailure() {
         return throwExceptionOnFailure;
     }
@@ -186,7 +195,6 @@ public class JdkHttpEndpoint extends DefaultEndpoint implements JdkHttpConfigura
         this.throwExceptionOnFailure = throwExceptionOnFailure;
     }
 
-    @Override
     public String getOkStatusCodeRanges() {
         return okStatusCodeRanges;
     }
@@ -195,7 +203,6 @@ public class JdkHttpEndpoint extends DefaultEndpoint implements JdkHttpConfigura
         this.okStatusCodeRanges = Objects.requireNonNull(okStatusCodeRanges, "OK StatusCode ranges cannot be null");
     }
 
-    @Override
     public Boolean getDisableStreamCache() {
         return disableStreamCache;
     }
@@ -204,7 +211,6 @@ public class JdkHttpEndpoint extends DefaultEndpoint implements JdkHttpConfigura
         this.disableStreamCache = disableStreamCache;
     }
 
-    @Override
     public Boolean getResponseBodyAsByteArray() {
         return responseBodyAsByteArray;
     }
@@ -213,7 +219,6 @@ public class JdkHttpEndpoint extends DefaultEndpoint implements JdkHttpConfigura
         this.responseBodyAsByteArray = responseBodyAsByteArray;
     }
 
-    @Override
     public Duration getConnectTimeout() {
         return connectTimeout;
     }
@@ -222,7 +227,6 @@ public class JdkHttpEndpoint extends DefaultEndpoint implements JdkHttpConfigura
         this.connectTimeout = Objects.requireNonNull(connectTimeout, "Connect timeout cannot be null");
     }
 
-    @Override
     public Duration getResponseTimeout() {
         return responseTimeout;
     }
@@ -231,16 +235,17 @@ public class JdkHttpEndpoint extends DefaultEndpoint implements JdkHttpConfigura
         this.responseTimeout = Objects.requireNonNull(responseTimeout, "Response timeout cannot be null");
     }
 
-    @Override
-    public Integer getMaxConnections() {
+    public int getMaxConnections() {
         return maxConnections;
     }
 
     public void setMaxConnections(int maxConnections) {
+        if (maxConnections < 1) {
+            throw new IllegalArgumentException("Maximum number of connections cannot be less than 1");
+        }
         this.maxConnections = maxConnections;
     }
 
-    @Override
     public SSLContextParameters getSslContextParameters() {
         return sslContextParameters;
     }
@@ -249,7 +254,6 @@ public class JdkHttpEndpoint extends DefaultEndpoint implements JdkHttpConfigura
         this.sslContextParameters = Objects.requireNonNull(sslContextParameters, "Camel SSLContextParameters cannot be null");
     }
 
-    @Override
     public HttpClient.Redirect getRedirectPolicy() {
         return redirectPolicy;
     }
@@ -263,21 +267,23 @@ public class JdkHttpEndpoint extends DefaultEndpoint implements JdkHttpConfigura
         return headerFilterStrategy;
     }
 
+    @Override
     public void setHeaderFilterStrategy(HeaderFilterStrategy headerFilterStrategy) {
         this.headerFilterStrategy = Objects.requireNonNull(headerFilterStrategy, "Camel HeaderFilterStrategy cannot be null");
     }
 
-    @Override
     public Integer getHttp2Priority() {
         return http2Priority;
     }
 
     public void setHttp2Priority(int http2Priority) {
+        if (http2Priority < 1 || http2Priority > 256) {
+            throw new IllegalArgumentException("HTTP/2 priority cannot be out of range [1, 256]");
+        }
         this.http2Priority = http2Priority;
     }
 
-    @Override
-    public Boolean getUseSystemProperties() {
+    public boolean isUseSystemProperties() {
         return useSystemProperties;
     }
 
@@ -285,25 +291,23 @@ public class JdkHttpEndpoint extends DefaultEndpoint implements JdkHttpConfigura
         this.useSystemProperties = useSystemProperties;
     }
 
-    @Override
-    public Boolean getAsync() {
+    public boolean isAsync() {
         return async;
     }
 
-    public void setAsync(Boolean async) {
+    public void setAsync(boolean async) {
         this.async = async;
     }
 
-    @Override
     public String getProxyHost() {
         return proxyHost;
     }
 
     public void setProxyHost(String proxyHost) {
-        this.proxyHost = Objects.requireNonNull(proxyHost, "HTTP proxy host cannot be null");
+        this.proxyHost = Objects.requireNonNull(proxyHost, "HTTP proxy host cannot be null")
+                .trim();
     }
 
-    @Override
     public Integer getProxyPort() {
         return proxyPort;
     }
@@ -313,47 +317,61 @@ public class JdkHttpEndpoint extends DefaultEndpoint implements JdkHttpConfigura
     }
 
 
-    private JdkHttpConfiguration resolveConfiguration() {
-        final JdkHttpConfiguration resolvedConfiguration = configuration != null ?
-                configuration.copy() :
-                new JdkHttpConfiguration();
-        setConfigurationParameters(resolvedConfiguration);
-
-        return resolvedConfiguration;
-    }
-
-    private HttpClient resolveHttpClient(JdkHttpConfiguration resolvedConfiguration)
-            throws GeneralSecurityException, IOException {
+    private synchronized HttpClient resolveHttpClient() throws GeneralSecurityException, IOException {
         if (httpClient != null) {
             return httpClient;
         }
-        if (resolvedConfiguration.isUseSystemProperties()) {
+        if (useSystemProperties) {
             return HttpClient.newHttpClient();
         }
 
         final HttpClient.Builder httpClientBuilder = HttpClient.newBuilder()
-                .version(resolvedConfiguration.getHttpVersion())
-                .connectTimeout(resolvedConfiguration.getConnectTimeout())
-                .executor(Executors.newFixedThreadPool(resolvedConfiguration.getMaxConnections()))
-                .followRedirects(resolvedConfiguration.getRedirectPolicy());
+                .version(httpVersion)
+                .connectTimeout(connectTimeout)
+                .executor(Executors.newFixedThreadPool(maxConnections))
+                .followRedirects(redirectPolicy);
 
-        final SSLContextParameters resolvedSsl = resolvedConfiguration.getSslContextParameters();
-        if (resolvedSsl != null && getCamelContext() != null) {
-            httpClientBuilder.sslContext(resolvedSsl.createSSLContext(getCamelContext()));
+        if (sslContextParameters != null && getCamelContext() != null) {
+            httpClientBuilder.sslContext(sslContextParameters.createSSLContext(getCamelContext()));
         }
 
-        final Integer resolvedHttp2Priority = resolvedConfiguration.getHttp2Priority();
-        if (resolvedHttp2Priority != null && resolvedConfiguration.getHttpVersion() == HttpClient.Version.HTTP_2) {
-            httpClientBuilder.priority(resolvedHttp2Priority);
+        if (http2Priority != null && httpVersion == HttpClient.Version.HTTP_2) {
+            httpClientBuilder.priority(http2Priority);
         }
 
-        final String resolvedProxyHost = resolvedConfiguration.getProxyHost();
-        if (resolvedProxyHost != null && !resolvedProxyHost.isBlank()) {
-            final Integer resolvedProxyPort = Objects.requireNonNull(resolvedConfiguration.getProxyPort(), "HTTP Proxy port is required");
-            httpClientBuilder.proxy(ProxySelector.of(InetSocketAddress.createUnresolved(resolvedProxyHost, resolvedProxyPort)));
+        if (proxyHost != null && !proxyHost.isBlank()) {
+            final Integer checkedProxyPort = Objects.requireNonNull(proxyPort, "HTTP Proxy port is required");
+            httpClientBuilder.proxy(ProxySelector.of(InetSocketAddress.createUnresolved(proxyHost, checkedProxyPort)));
         }
 
         return httpClientBuilder.build();
+    }
+
+    private void setBindingParameters(JdkHttpBinding httpBinding) {
+        if (httpMethod != null && !httpMethod.isBlank()) {
+            httpBinding.setHttpMethod(httpMethod);
+        }
+
+        if (throwExceptionOnFailure != null) {
+            httpBinding.setThrowExceptionOnFailure(throwExceptionOnFailure);
+        }
+        if (okStatusCodeRanges != null && !okStatusCodeRanges.isBlank()) {
+            httpBinding.setOkStatusCodeRanges(okStatusCodeRanges);
+        }
+        if (disableStreamCache != null) {
+            httpBinding.setDisableStreamCache(disableStreamCache);
+        }
+        if (responseBodyAsByteArray != null) {
+            httpBinding.setResponseBodyAsByteArray(responseBodyAsByteArray);
+        }
+
+        if (responseTimeout != null) {
+            httpBinding.setResponseTimeout(responseTimeout);
+        }
+
+        if (headerFilterStrategy != null) {
+            httpBinding.setHeaderFilterStrategy(headerFilterStrategy);
+        }
     }
 
     private void closeHttpClient() {

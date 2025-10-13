@@ -18,22 +18,23 @@ import java.util.function.BiFunction;
 
 public class JdkHttpAsyncProducer extends DefaultAsyncProducer {
 
-    private final JdkHttpConfiguration configuration;
     private final HttpClient httpClient;
+    private final JdkHttpBinding httpBinding;
 
-    public JdkHttpAsyncProducer(JdkHttpEndpoint endpoint, JdkHttpConfiguration configuration, HttpClient httpClient) {
+    public JdkHttpAsyncProducer(JdkHttpEndpoint endpoint, HttpClient httpClient, JdkHttpBinding httpBinding) {
         super(endpoint);
-        this.configuration = Objects.requireNonNull(configuration, "JdkHttpConfiguration cannot be null")
-                .copy();
         this.httpClient = Objects.requireNonNull(httpClient, "HTTP client cannot be null");
+        this.httpBinding = Objects.requireNonNull(httpBinding, "JdkHttpBinding cannot be null");
     }
 
     @Override
     public boolean process(Exchange exchange, AsyncCallback callback) {
         try {
-            final HttpRequest httpRequest = JdkHttpHelper.httpRequestFromExchange(exchange, configuration);
+            final HttpRequest httpRequest = httpBinding.httpRequestFromExchange(exchange);
+            final Object requestBody = exchange.getMessage().getBody();
+
             httpClient.sendAsync(httpRequest, HttpResponse.BodyHandlers.ofInputStream())
-                    .handle(asyncHandler(exchange, callback));
+                    .handle(asyncHandler(exchange, callback, requestBody));
         } catch (CamelExchangeException | URISyntaxException e) {
             exchange.setException(e);
             callback.done(true);
@@ -44,20 +45,9 @@ public class JdkHttpAsyncProducer extends DefaultAsyncProducer {
         return false;
     }
 
-
-    public JdkHttpConfiguration getConfiguration() {
-        return configuration.copy();
-    }
-
-    public HttpClient getHttpClient() {
-        return httpClient;
-    }
-
-
-    private BiFunction<HttpResponse<InputStream>, Throwable, Void> asyncHandler(Exchange exchange, AsyncCallback callback) {
+    private BiFunction<HttpResponse<InputStream>, Throwable, Void> asyncHandler(Exchange exchange, AsyncCallback callback, Object requestBody) {
         return (httpResponse, throwable) -> {
-            final Object body = exchange.getMessage().getBody();
-            if (body instanceof Closeable closeable) {
+            if (requestBody instanceof Closeable closeable) {
                 IOHelper.close(closeable);
             }
 
@@ -66,7 +56,7 @@ public class JdkHttpAsyncProducer extends DefaultAsyncProducer {
                 callback.done(false);
             } else {
                 try {
-                    JdkHttpHelper.httpResponseToExchange(httpResponse, exchange, configuration);
+                    httpBinding.httpResponseToExchange(httpResponse, exchange);
                 } catch (Exception e) {
                     exchange.setException(e);
                 } finally {

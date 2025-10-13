@@ -14,21 +14,20 @@ import java.util.Objects;
 
 public class JdkHttpProducer extends DefaultProducer {
 
-    private final JdkHttpConfiguration configuration;
     private final HttpClient httpClient;
+    private final JdkHttpBinding httpBinding;
 
-    public JdkHttpProducer(JdkHttpEndpoint endpoint, JdkHttpConfiguration configuration, HttpClient httpClient) {
+    public JdkHttpProducer(JdkHttpEndpoint endpoint, HttpClient httpClient, JdkHttpBinding httpBinding) {
         super(endpoint);
-        this.configuration = Objects.requireNonNull(configuration, "JdkHttpConfiguration cannot be null")
-                .copy();
         this.httpClient = Objects.requireNonNull(httpClient, "HTTP client cannot be null");
+        this.httpBinding = Objects.requireNonNull(httpBinding, "JdkHttpBinding cannot be null");
     }
 
     @Override
     public void process(Exchange exchange) throws Exception {
         final HttpResponse<InputStream> httpResponse;
         try {
-            final HttpRequest httpRequest = JdkHttpHelper.httpRequestFromExchange(exchange, configuration);
+            final HttpRequest httpRequest = httpBinding.httpRequestFromExchange(exchange);
             httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofInputStream());
         } finally {
             final Object body = exchange.getMessage().getBody();
@@ -38,7 +37,7 @@ public class JdkHttpProducer extends DefaultProducer {
         }
 
         try {
-            JdkHttpHelper.httpResponseToExchange(httpResponse, exchange, configuration);
+            httpBinding.httpResponseToExchange(httpResponse, exchange);
         } finally {
             exchange.getExchangeExtension().addOnCompletion(new SynchronizationAdapter() {
                 @Override
@@ -49,15 +48,6 @@ public class JdkHttpProducer extends DefaultProducer {
                 }
             });
         }
-    }
-
-
-    public JdkHttpConfiguration getConfiguration() {
-        return configuration.copy();
-    }
-
-    public HttpClient getHttpClient() {
-        return httpClient;
     }
 
 }
