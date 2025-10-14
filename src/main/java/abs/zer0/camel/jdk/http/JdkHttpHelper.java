@@ -1,8 +1,10 @@
 package abs.zer0.camel.jdk.http;
 
 import org.apache.camel.Message;
+import org.apache.camel.util.UnsafeUriCharactersEncoder;
 
-import java.util.Map;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.Objects;
 
 public final class JdkHttpHelper {
@@ -19,63 +21,80 @@ public final class JdkHttpHelper {
                 .orElse(null);
     }
 
-    public static final Map<Integer, String> HTTP_STATUSES = Map.ofEntries(
-            Map.entry(100, "Continue"),
-            Map.entry(101, "Switching Protocols"),
-            Map.entry(103, "Early Hints"),
+    public static URI setUriScheme(URI uri, String scheme) throws URISyntaxException {
+        Objects.requireNonNull(uri, "HTTP URI cannot be null");
 
-            Map.entry(200, "OK"),
-            Map.entry(201, "Created"),
-            Map.entry(202, "Accepted"),
-            Map.entry(203, "Non-Authoritative Information"),
-            Map.entry(204, "No Content"),
-            Map.entry(205, "Reset Content"),
-            Map.entry(206, "Partial Content"),
-            Map.entry(226, "IM Used"),
+        if (scheme == null || scheme.isBlank()) {
+            return uri;
+        }
 
-            Map.entry(300, "Multiple Choices"),
-            Map.entry(301, "Moved Permanently"),
-            Map.entry(302, "Moved Temporarily"),
-            Map.entry(303, "See Other"),
-            Map.entry(304, "Not Modified"),
-            Map.entry(305, "Use Proxy"),
-            Map.entry(307, "Temporary Redirect"),
-            Map.entry(308, "Permanent Redirect"),
+        return new URI(
+                scheme.trim(),
+                uri.getUserInfo(),
+                uri.getHost(),
+                uri.getPort(),
+                uri.getPath(),
+                uri.getQuery(),
+                uri.getFragment()
+        );
+    }
 
-            Map.entry(400, "Bad Request"),
-            Map.entry(401, "Unauthorized"),
-            Map.entry(402, "Payment Required"),
-            Map.entry(403, "Forbidden"),
-            Map.entry(404, "Not Found"),
-            Map.entry(405, "Method Not Allowed"),
-            Map.entry(406, "Not Acceptable"),
-            Map.entry(407, "Proxy Authentication Required"),
-            Map.entry(408, "Request Timeout"),
-            Map.entry(409, "Conflict"),
-            Map.entry(410, "Gone"),
-            Map.entry(411, "Length Required"),
-            Map.entry(412, "Precondition Failed"),
-            Map.entry(413, "Payload Too Large"),
-            Map.entry(414, "URI Too Long"),
-            Map.entry(415, "Unsupported Media Type"),
-            Map.entry(416, "Range Not Satisfiable"),
-            Map.entry(417, "Expectation Failed"),
-            Map.entry(421, "Misdirected Request"),
-            Map.entry(425, "Too Early"),
-            Map.entry(426, "Upgrade Required"),
-            Map.entry(428, "Precondition Required"),
-            Map.entry(429, "Too Many Requests"),
+    public static URI setUriHost(URI uri, String host) throws URISyntaxException {
+        Objects.requireNonNull(uri, "HTTP URI cannot be null");
 
-            Map.entry(500, "Internal Server Error"),
-            Map.entry(501, "Not Implemented"),
-            Map.entry(502, "Bad Gateway"),
-            Map.entry(503, "Service Unavailable"),
-            Map.entry(504, "Gateway Timeout"),
-            Map.entry(505, "HTTP Version Not Supported"),
-            Map.entry(506, "Variant Also Negotiates"),
-            Map.entry(510, "Not Extended")
-    );
+        if (host == null || host.isBlank()) {
+            return uri;
+        }
 
+        return new URI(
+                uri.getScheme(),
+                uri.getUserInfo(),
+                host.trim(),
+                uri.getPort(),
+                uri.getPath(),
+                uri.getQuery(),
+                uri.getFragment()
+        );
+    }
+
+    public static URI setUriPort(URI uri, int port) throws URISyntaxException {
+        Objects.requireNonNull(uri, "HTTP URI cannot be null");
+
+        return new URI(
+                uri.getScheme(),
+                uri.getUserInfo(),
+                uri.getHost(),
+                port,
+                uri.getPath(),
+                uri.getQuery(),
+                uri.getFragment()
+        );
+    }
+
+    public static URI appendUriPath(URI uri, String path) throws URISyntaxException {
+        Objects.requireNonNull(uri, "HTTP URI cannot be null");
+
+        if (path == null || path.isBlank()) {
+            return uri;
+        }
+
+        String encodedPath = UnsafeUriCharactersEncoder.encodeHttpURI(path.trim());
+        if (uri.getPath() != null && uri.getPath().endsWith("/") && encodedPath.startsWith("/")) {
+            encodedPath = encodedPath.substring(1);
+        } else if (uri.getPath() != null && !uri.getPath().endsWith("/") && !encodedPath.startsWith("/")) {
+            encodedPath = "/" + encodedPath;
+        }
+
+        return new URI(
+                uri.getScheme(),
+                uri.getUserInfo(),
+                uri.getHost(),
+                uri.getPort(),
+                uri.getPath() + encodedPath,
+                uri.getQuery(),
+                uri.getFragment()
+        );
+    }
 
     private JdkHttpHelper() {
     }

@@ -32,6 +32,8 @@ import java.util.stream.IntStream;
 
 public final class JdkHttpBinding {
 
+    private static final Set<String> ALLOW_RESTRICTED_HEADERS = parseAllowRestrictedHeaders();
+
     private final URI httpUri;
     private String httpMethod;
 
@@ -49,8 +51,7 @@ public final class JdkHttpBinding {
     }
 
 
-    public HttpRequest httpRequestFromExchange(Exchange exchange)
-            throws URISyntaxException, CamelExchangeException {
+    public HttpRequest httpRequestFromExchange(Exchange exchange) throws URISyntaxException, CamelExchangeException {
         final Message message = exchange.getMessage();
 
         final HttpRequest.Builder httpRequestBuilder = HttpRequest.newBuilder()
@@ -97,7 +98,7 @@ public final class JdkHttpBinding {
         final Message message = exchange.getMessage();
 
         final int statusCode = httpResponse.statusCode();
-        final String statusText = JdkHttpHelper.HTTP_STATUSES.get(statusCode);
+        final String statusText = JdkHttpConstants.HTTP_STATUSES.get(statusCode);
         if (!okStatusCodes.contains(statusCode) && throwExceptionOnFailure) {
             final String uri = httpResponse.uri().toString();
             final String location = httpResponse.headers().firstValue(JdkHttpConstants.LOCATION).orElse(null);
@@ -176,6 +177,20 @@ public final class JdkHttpBinding {
     }
 
 
+    private static Set<String> parseAllowRestrictedHeaders() {
+        final String allowRestrictedHeaders = System.getProperty("jdk.httpclient.allowRestrictedHeaders");
+        if (allowRestrictedHeaders == null) {
+            return Collections.emptySet();
+        }
+
+        final Set<String> allowedHeaders = new TreeSet<>(String::compareToIgnoreCase);
+        for (String header : allowRestrictedHeaders.split(",")) {
+            allowedHeaders.add(header.trim());
+        }
+
+        return Collections.unmodifiableSet(allowedHeaders);
+    }
+
     private Set<Integer> parseOkStatusCodeRanges(String okStatusCodeRanges) {
         try {
             final Set<Integer> okStatuses = new HashSet<>();
@@ -217,62 +232,19 @@ public final class JdkHttpBinding {
             if (!"http".equals(schemeTrimmed) && !"https".equals(schemeTrimmed)) {
                 throw new IllegalArgumentException(JdkHttpConstants.HTTP_SCHEME + " header must provided only http or https value");
             }
-            uri = new URI(
-                    scheme,
-                    uri.getUserInfo(),
-                    uri.getHost(),
-                    uri.getPort(),
-                    uri.getPath(),
-                    uri.getQuery(),
-                    uri.getFragment()
-            );
+            uri = JdkHttpHelper.setUriScheme(uri, schemeTrimmed);
         }
 
         final String host = message.getHeader(JdkHttpConstants.HTTP_HOST, String.class);
-        if (host != null && !host.isBlank()) {
-            uri = new URI(
-                    uri.getScheme(),
-                    uri.getUserInfo(),
-                    host.trim(),
-                    uri.getPort(),
-                    uri.getPath(),
-                    uri.getQuery(),
-                    uri.getFragment()
-            );
-        }
+        uri = JdkHttpHelper.setUriHost(uri, host);
 
         final Integer port = message.getHeader(JdkHttpConstants.HTTP_PORT, Integer.class);
         if (port != null) {
-            uri = new URI(
-                    uri.getScheme(),
-                    uri.getUserInfo(),
-                    uri.getHost(),
-                    port,
-                    uri.getPath(),
-                    uri.getQuery(),
-                    uri.getFragment()
-            );
+            uri = JdkHttpHelper.setUriPort(uri, port);
         }
 
         final String path = message.getHeader(JdkHttpConstants.HTTP_PATH, String.class);
-        if (path != null && !path.isBlank()) {
-            String encodedPath = UnsafeUriCharactersEncoder.encodeHttpURI(path.trim());
-            if (uri.getPath() != null && uri.getPath().endsWith("/") && encodedPath.startsWith("/")) {
-                encodedPath = encodedPath.substring(1);
-            } else if (uri.getPath() != null && !uri.getPath().endsWith("/") && !encodedPath.startsWith("/")) {
-                encodedPath = "/" + encodedPath;
-            }
-
-            uri = new URI(
-                    uri.getScheme(),
-                    uri.getUserInfo(),
-                    uri.getHost(),
-                    uri.getPort(),
-                    uri.getPath() + encodedPath,
-                    uri.getQuery(),
-                    uri.getFragment()
-            );
-        }
+        uri = JdkHttpHelper.appendUriPath(uri, path);
 
         final String query = message.getHeader(JdkHttpConstants.HTTP_QUERY, String.class);
         if (query != null && !query.isBlank()) {
@@ -350,8 +322,11 @@ public final class JdkHttpBinding {
         final Map<String, List<String>> filteredHeaders = new TreeMap<>(String::compareToIgnoreCase);
         for (Map.Entry<String, Object> header : message.getHeaders().entrySet()) {
             final String headerName = header.getKey();
-            final Iterable<?> headerValues = ObjectHelper.createIterable(header.getValue(), null, true);
+            if (JdkHttpConstants.RESTRICTED_HEADERS.contains(headerName) && !ALLOW_RESTRICTED_HEADERS.contains(headerName)) {
+                continue;
+            }
 
+            final Iterable<?> headerValues = ObjectHelper.createIterable(header.getValue(), null, true);
             headerValues.forEach(value -> {
                 final String strValue = typeConverter.tryConvertTo(String.class, value);
                 if (strValue != null && !headerFilterStrategy.applyFilterToCamelHeaders(headerName, strValue, exchange)) {
