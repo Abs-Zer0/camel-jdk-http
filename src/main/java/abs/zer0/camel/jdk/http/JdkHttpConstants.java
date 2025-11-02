@@ -8,6 +8,14 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 
+/**
+ * Constants for the JDK HTTP component.
+ *
+ * @see JdkHttpComponent
+ * @see JdkHttpBinding
+ * @see JdkHttpProducer
+ * @see JdkHttpAsyncProducer
+ */
 public final class JdkHttpConstants {
 
     @Metadata(label = "producer", javaType = "java.net.http.HttpClient.Version", description = "The version of the HTTP protocol used.")

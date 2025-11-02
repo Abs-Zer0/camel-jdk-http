@@ -30,6 +30,12 @@ import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+/**
+ * This class is responsible for converting a message from a Camel Exchange into an {@link HttpRequest},
+ * as well as for converting a received {@link HttpResponse} back into a Camel Exchange.
+ * It provides configurable control over the HTTP method, headers, request/response body,
+ * status codes, and other parameters of HTTP interaction.
+ */
 public final class JdkHttpBinding {
 
     private static final Set<String> ALLOW_RESTRICTED_HEADERS = parseAllowRestrictedHeaders();
@@ -46,11 +52,27 @@ public final class JdkHttpBinding {
 
     private HeaderFilterStrategy headerFilterStrategy = new HttpHeaderFilterStrategy();
 
+    /**
+     * Creates a new binding instance with the specified default URI.
+     *
+     * @param httpUri the URI is used as a fallback when no URI header is present in the Exchange. Must not be {@code null}.
+     */
     public JdkHttpBinding(URI httpUri) {
         this.httpUri = Objects.requireNonNull(httpUri, "HTTP URI cannot be null");
     }
 
-
+    /**
+     * Converts a message from an {@link Exchange} into an {@link HttpRequest}.
+     * The method extracts the URI, method, headers, and body from the Exchange to build the HTTP request.
+     * <br/>
+     * The fields of this class customize the creation logic of the {@link HttpRequest}.
+     *
+     * @param exchange the Camel Exchange containing the source message.
+     * @return a configured {@link HttpRequest}.
+     * @throws URISyntaxException       if the URI in the message is invalid.
+     * @throws CamelExchangeException   if an error occurs while creating the request body.
+     * @throws IllegalArgumentException if an unsupported HTTP method is used.
+     */
     public HttpRequest httpRequestFromExchange(Exchange exchange) throws URISyntaxException, CamelExchangeException {
         final Message message = exchange.getMessage();
 
@@ -93,6 +115,18 @@ public final class JdkHttpBinding {
         return httpRequestBuilder.build();
     }
 
+    /**
+     * Populates the {@link Exchange} with information from the {@link HttpResponse}.
+     * It extracts the status code, headers, and body from the response and places them into the Exchange message.
+     * <br/>
+     * If the response status is not successful and the {@code throwExceptionOnFailure} flag is enabled,
+     * an {@link HttpOperationFailedException} will be thrown.
+     *
+     * @param httpResponse the HTTP response received from the server.
+     * @param exchange     the Camel Exchange to be updated.
+     * @throws HttpOperationFailedException if the response status indicates an error and {@code throwExceptionOnFailure} is {@code true}.
+     * @throws IOException                  if an error occurs while reading the response body.
+     */
     public void httpResponseToExchange(HttpResponse<InputStream> httpResponse, Exchange exchange)
             throws HttpOperationFailedException, IOException {
         final Message message = exchange.getMessage();
@@ -113,65 +147,158 @@ public final class JdkHttpBinding {
     }
 
 
+    /**
+     * Gets the default URI configured for this binding.
+     *
+     * @return the default {@link URI}.
+     */
     public URI getHttpUri() {
         return httpUri;
     }
 
+    /**
+     * Gets the overriden HTTP method configured for this binding.
+     *
+     * @return the overriden HTTP method, or {@code null} if not set.
+     */
     public String getHttpMethod() {
         return httpMethod;
     }
 
+    /**
+     * Sets the overriden HTTP method for this binding.
+     * This method ignores the {@link JdkHttpConstants#HTTP_METHOD} header in the Exchange.
+     * <br/>
+     * If neither is set, the method defaults to "GET" for a request without a body and "POST" otherwise.
+     *
+     * @param httpMethod the overriden HTTP method. Must not be {@code null}.
+     */
     public void setHttpMethod(String httpMethod) {
         this.httpMethod = Objects.requireNonNull(httpMethod, "HTTP method cannot be null")
                 .trim()
                 .toUpperCase();
     }
 
+    /**
+     * The flag that determines whether an exception should be thrown for non-successful HTTP responses.
+     *
+     * @return {@code true} if an exception is thrown on failure, otherwise {@code false}.
+     */
     public boolean isThrowExceptionOnFailure() {
         return throwExceptionOnFailure;
     }
 
+    /**
+     * Sets the flag that determines whether an exception should be thrown for non-successful HTTP responses.
+     * If set to {@code true}, an {@link HttpOperationFailedException} is thrown when the response status code
+     * is not in the successful code ranges.
+     *
+     * @param throwExceptionOnFailure {@code true} to throw an exception on failure, otherwise {@code false}.
+     */
     public void setThrowExceptionOnFailure(boolean throwExceptionOnFailure) {
         this.throwExceptionOnFailure = throwExceptionOnFailure;
     }
 
+    /**
+     * Gets the set of status codes that are considered successful.
+     * A response with a status code in this set will not trigger an exception,
+     * even if {@link #throwExceptionOnFailure} is {@code true}.
+     *
+     * @return an unmodifiable {@link Set} of successful status codes.
+     */
     public Set<Integer> getOkStatusCodes() {
         return okStatusCodes;
     }
 
-    public synchronized void setOkStatusCodeRanges(String okStatusCodeRanges) {
+    /**
+     * Sets the ranges of status codes that are considered successful.
+     * The format of the string is a comma-separated list of codes or ranges, e.g., "200,201-299,404".
+     * <br/>
+     * The default range is 200-299.
+     *
+     * @param okStatusCodeRanges a string with the status code ranges. Must not be {@code null}.
+     */
+    public void setOkStatusCodeRanges(String okStatusCodeRanges) {
         Objects.requireNonNull(okStatusCodeRanges, "OK StatusCode ranges cannot be null");
         this.okStatusCodes = parseOkStatusCodeRanges(okStatusCodeRanges);
     }
 
+    /**
+     * The flag that determines whether stream caching for the response body is disabled.
+     *
+     * @return {@code true} if stream caching must be disabled, otherwise {@code false}.
+     */
     public boolean isDisableStreamCache() {
         return disableStreamCache;
     }
 
+    /**
+     * Sets the flag to disable stream caching for the response body.
+     * If {@code true}, the response body will be set as an {@link InputStream} directly in the message,
+     * allowing for only a single read. If {@code false}, the body is cached in memory for repeated access.
+     *
+     * @param disableStreamCache {@code true} to disable stream caching, otherwise {@code false}.
+     */
     public void setDisableStreamCache(boolean disableStreamCache) {
         this.disableStreamCache = disableStreamCache;
     }
 
+    /**
+     * The flag that determines if the response body should be returned as a byte array ({@code byte[]}).
+     *
+     * @return {@code true} if the response body will be a {@code byte[]}, otherwise {@code false}.
+     */
     public boolean isResponseBodyAsByteArray() {
         return responseBodyAsByteArray;
     }
 
+    /**
+     * Sets the flag to determine that the response body should be converted to a byte array ({@code byte[]}).
+     * If {@code true}, the response body will be fully read and converted to a {@code byte[]}.
+     * <br/>
+     * This setting takes precedence over {@link #disableStreamCache}.
+     *
+     * @param responseBodyAsByteArray {@code true} for the response body to be a {@code byte[]}, otherwise {@code false}.
+     */
     public void setResponseBodyAsByteArray(boolean responseBodyAsByteArray) {
         this.responseBodyAsByteArray = responseBodyAsByteArray;
     }
 
+    /**
+     * Gets the timeout for waiting an HTTP response.
+     *
+     * @return the {@link Duration} timeout, or {@code null} if not set.
+     */
     public Duration getResponseTimeout() {
         return responseTimeout;
     }
 
+    /**
+     * Sets the timeout for waiting an HTTP response.
+     * This timeout is applied to the {@link HttpRequest} when it is built.
+     *
+     * @param responseTimeout the {@link Duration} timeout. Must not be {@code null}.
+     */
     public void setResponseTimeout(Duration responseTimeout) {
         this.responseTimeout = Objects.requireNonNull(responseTimeout, "Response timeout cannot be null");
     }
 
+    /**
+     * Gets the header filtering strategy used to control which headers are propagated.
+     *
+     * @return the {@link HeaderFilterStrategy}.
+     */
     public HeaderFilterStrategy getHeaderFilterStrategy() {
         return headerFilterStrategy;
     }
 
+    /**
+     * Sets the header filtering strategy.
+     * This strategy determines which headers are filtered out when mapping between Camel messages
+     * and HTTP requests/responses.
+     *
+     * @param headerFilterStrategy the {@link HeaderFilterStrategy} to use. Must not be {@code null}.
+     */
     public void setHeaderFilterStrategy(HeaderFilterStrategy headerFilterStrategy) {
         this.headerFilterStrategy = Objects.requireNonNull(headerFilterStrategy, "Camel HeaderFilterStrategy cannot be null");
     }
@@ -378,3 +505,4 @@ public final class JdkHttpBinding {
     }
 
 }
+
